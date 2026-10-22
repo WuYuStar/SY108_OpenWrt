@@ -19,7 +19,7 @@
 ### 3.1 如无法连接端口进入FD2模式则需要修改端口需要用到Zadig
 - **Zadig 工具**：https://zadig.akeo.ie/#
 - **Zadig使用教程**：Options --> List AII Devices 选中，在设备选中框中选中SPRD U2S Diag，Driver中查看当前驱动是否为sprdvcom，将其改为libusb-win32。
-![[Pasted image 20261022210003.png]]
+![[Zadig.png]]
 
 ### 4. 提取与备份原厂文件
 **警告：** 进入 `FDL2 >` 后，一条一条依次输入下面的命令，**每敲完一条等它跑到 100% 并出现 `Read Part Done` 后**，再敲下一条。
