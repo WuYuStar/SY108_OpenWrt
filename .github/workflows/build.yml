@@ -35,10 +35,21 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential rsync unzip libncurses5-dev zlib1g-dev gawk wget git curl file
 
-      - name: 拉取主仓库代码
+      - name: 拉取当前仓库 (提取 privates 文件)
         uses: actions/checkout@v4
         with:
+          path: 'my-config'
+
+      - name: 拉取作者原始主仓库代码
+        uses: actions/checkout@v4
+        with:
+          repository: 'jason-liu-4980/sy108-mainline'
           path: 'sy108-mainline'
+
+      - name: 将私有文件注入主仓库
+        run: |
+          mkdir -p sy108-mainline/privates
+          cp my-config/privates/* sy108-mainline/privates/
 
       - name: 拉取 Linux 内核仓库
         uses: actions/checkout@v4
