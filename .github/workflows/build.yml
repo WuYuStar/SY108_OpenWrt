@@ -1,12 +1,18 @@
 name: Build SY108 OpenWrt Firmware
 
 on:
-  workflow_dispatch: # 允许手动触发
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: '是否自动创建 GitHub Release 发布固件？'
+        required: true
+        type: boolean
+        default: false
 
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 350 # 预留 6 小时，防止超时中断
+    timeout-minutes: 360
     
     steps:
       - name: Maximize build space
@@ -19,26 +25,27 @@ jobs:
           remove-haskell: 'true'
           remove-codeql: 'true'
 
-      - name: Set up QEMU (Required for ARM64 Docker)
+      - name: Set up QEMU and Docker Buildx
         uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
 
       - name: Install host dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential rsync unzip libncurses5-dev zlib1g-dev gawk wget git curl file
 
-      - name: Checkout main repo
+      - name: Checkout Main Repo
         uses: actions/checkout@v4
         with:
           path: 'sy108-mainline'
 
-      - name: Checkout Linux kernel (Same level)
+      - name: Checkout Linux Kernel
         uses: actions/checkout@v4
         with:
           repository: 'jason-liu-4980/linux-udx710'
           path: 'linux-udx710'
 
-      - name: Checkout U-Boot
+      - name: Checkout U-Boot Repo
         uses: actions/checkout@v4
         with:
           repository: 'jason-liu-4980/sy108-uboot-spl'
@@ -47,16 +54,14 @@ jobs:
       - name: Apply patches and fix permissions
         run: |
           cd sy108-mainline
-          # 1. 修改 Python 脚本，直接跳过哈希校验报错（最安全的做法）
           sed -i 's/raise SystemExit("Linux archive checksum mismatch")/pass/g' tools/build/kernel-source.py
-          # 2. 给脚本加上执行权限
           chmod +x tools/python
           chmod +x tools/build/*.py
 
       - name: Bootstrap OpenWrt Environment
         run: |
           cd sy108-mainline
-          # 指向同级目录的内核源码，让它直接使用本地内核
+          # 指向同级目录的内核源码
           export SY108_KERNEL_DIR=${{ github.workspace }}/linux-udx710
           tools/python tools/bootstrap.py
 
@@ -80,17 +85,14 @@ jobs:
       - name: Package U-Boot with SML Envelope
         run: |
           cd sy108-uboot-spl
-          # 使用你在 privates 文件夹里放的 bin 文件，主系统 Capsule 和 Recovery Capsule
           make offline LABEL=mainline \
             SPL_IMAGE=${{ github.workspace }}/sy108-mainline/privates/splloader.bin \
             SML_IMAGE=${{ github.workspace }}/sy108-mainline/privates/sml.bin \
             MAIN_CAPSULE=${{ github.workspace }}/sy108-mainline/out/images/main/boot.bin \
             RECOVERY_CAPSULE=${{ github.workspace }}/sy108-mainline/out/images/recovery/boot.bin
-            
-          # 打印并检查封装报告，确保签名和头部无误
           cat build/mainline/offline-report.json
 
-      - name: Upload Final Firmware Artifacts
+      - name: Upload Artifacts (Actions 页面下载)
         uses: actions/upload-artifact@v4
         with:
           name: SY108-OpenWrt-Firmware
@@ -99,3 +101,19 @@ jobs:
             sy108-mainline/out/images/main/boot.bin
             sy108-mainline/out/images/recovery/boot.bin
             sy108-uboot-spl/build/mainline/uboot.bin
+
+      - name: Release Firmware (可选发布到 Releases)
+        if: ${{ inputs.create_release == true }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: SY108 OpenWrt Firmware Build ${{ github.run_number }}
+          draft: false
+          prerelease: false
+          files: |
+            sy108-mainline/out/images/main/sysupgrade.bin
+            sy108-mainline/out/images/main/boot.bin
+            sy108-mainline/out/images/recovery/boot.bin
+            sy108-uboot-spl/build/mainline/uboot.bin
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
