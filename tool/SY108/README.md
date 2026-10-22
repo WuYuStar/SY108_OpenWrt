@@ -3,9 +3,9 @@
 - **工作目录**：`C:\sy108_tool`
     
 - **所需文件**：`spd_dump.exe`、`libusb-1.0.dll`、`custom_exec_no_verify_3f28.bin`、`fdl1`（无后缀）、`fdl2`（无后缀）
-    
-
----
+- **spd_dump.exe 的下载来源**：https://nightly.link/TomKing062/action_spd_dump_it/workflows/build/main
+- **spd_dump版本说明**：spd_dump_it_oldpath_233_7a50382_x64_Release 旧版、spd_dump_it_main_249_2fe0b5b_x64_Release 新版
+  
 
 ### 🔌 第一步：连接设备（进入 FDL2 模式）
 
