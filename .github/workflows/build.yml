@@ -97,7 +97,8 @@ jobs:
           echo "⏳ 开始初始化 OpenWrt 编译树，请耐心等待..."
           cd sy108-mainline
           export SY108_KERNEL_DIR=${{ github.workspace }}/linux-udx710
-          # 强制使用 Python 3.11 运行
+          export SY108_JOBS=4
+          export SY108_MEMORY=10g
           python3 tools/bootstrap.py
           echo "✅ OpenWrt 环境初始化完成！"
 
@@ -106,6 +107,8 @@ jobs:
           echo "⏳ 正在编译主系统固件 (Main)，这需要较长时间..."
           cd sy108-mainline
           export SY108_KERNEL_DIR=${{ github.workspace }}/linux-udx710
+          export SY108_JOBS=4
+          export SY108_MEMORY=10g
           python3 tools/build/firmware.py main
           echo "✅ 主系统编译完成！"
 
@@ -114,6 +117,8 @@ jobs:
           echo "⏳ 正在编译恢复系统固件 (Recovery)..."
           cd sy108-mainline
           export SY108_KERNEL_DIR=${{ github.workspace }}/linux-udx710
+          export SY108_JOBS=4
+          export SY108_MEMORY=10g
           python3 tools/build/firmware.py recovery
           echo "✅ 恢复系统编译完成！"
 
