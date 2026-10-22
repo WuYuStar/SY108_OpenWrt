@@ -85,30 +85,29 @@ read_part nr_agdsp 0 6M nr_agdsp.bin
     
 - 依次逐行输入以下刷写命令，将固件写入设备。
     
-
 写入自定义 U-Boot：
 
-text
-
+```
 w uboot uboot.bin
+```
 
 写入 OpenWrt 主系统：
 
-text
-
+```
 w system sysupgrade.bin
+```
 
 写入恢复系统：
 
-text
-
+```
 w recovery recovery_boot.bin
+```
 
 重启设备：
 
-text
-
+```
 reset
+```
 
 注意：具体写入的分区名称，请根据原厂分区表确认。
 
