@@ -15,7 +15,7 @@ jobs:
     timeout-minutes: 360
     
     steps:
-      - name: 释放磁盘空间 (清理无用工具)
+      - name: 01 - 释放磁盘空间 (清理无用工具)
         uses: jlumbroso/free-disk-space@main
         with:
           tool-cache: false
@@ -26,84 +26,120 @@ jobs:
           docker-images: true
           swap-storage: true
 
-      - name: 配置 QEMU 和 Docker 环境 (支持 ARM64)
-        uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
+      - name: 02 - 配置 Python 3.11 环境 (修复 hashlib 报错)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-      - name: 安装基础编译依赖
+      - name: 03 - 配置 QEMU 和 Docker 环境 (支持 ARM64)
+        uses: docker/setup-qemu-action@v3
+      
+      - name: 04 - 配置 Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 05 - 安装基础编译依赖
         run: |
+          echo "⏳ 正在安装编译所需的系统依赖..."
           sudo apt-get update
           sudo apt-get install -y build-essential rsync unzip libncurses5-dev zlib1g-dev gawk wget git curl file
+          echo "✅ 依赖安装完成！"
 
-      - name: 拉取当前仓库 (提取 privates 文件)
+      - name: 06 - 拉取当前仓库 (提取 privates 文件)
         uses: actions/checkout@v4
         with:
           path: 'my-config'
 
-      - name: 拉取作者原始主仓库代码
+      - name: 07 - 拉取作者原始主仓库代码
         uses: actions/checkout@v4
         with:
           repository: 'jason-liu-4980/sy108-mainline'
           path: 'sy108-mainline'
 
-      - name: 将私有文件注入主仓库
+      - name: 08 - 将私有文件注入主仓库并验证
         run: |
+          echo "⏳ 正在将 privates 文件夹注入到主仓库..."
           mkdir -p sy108-mainline/privates
           cp my-config/privates/* sy108-mainline/privates/
+          
+          echo "------------------------------------------------"
+          echo "✅ 注入完成！当前主仓库 privates 目录下的文件如下："
+          ls -l sy108-mainline/privates/
+          echo "------------------------------------------------"
+          if [ ! -f sy108-mainline/privates/splloader.bin ] || [ ! -f sy108-mainline/privates/sml.bin ]; then
+            echo "❌ 错误：splloader.bin 或 sml.bin 缺失，请检查你仓库里的 privates 文件夹！"
+            exit 1
+          fi
+          echo "✅ 验证通过：原厂引导文件已就绪！"
 
-      - name: 拉取 Linux 内核仓库
+      - name: 09 - 拉取 Linux 内核仓库
         uses: actions/checkout@v4
         with:
           repository: 'jason-liu-4980/linux-udx710'
           path: 'linux-udx710'
 
-      - name: 拉取 U-Boot 仓库
+      - name: 10 - 拉取 U-Boot 仓库
         uses: actions/checkout@v4
         with:
           repository: 'jason-liu-4980/sy108-uboot-spl'
           path: 'sy108-uboot-spl'
 
-      - name: 应用补丁并修复脚本执行权限
+      - name: 11 - 应用补丁并修复脚本执行权限
         run: |
+          echo "⏳ 正在绕过内核校验并修复脚本权限..."
           cd sy108-mainline
           sed -i 's/raise SystemExit("Linux archive checksum mismatch")/pass/g' tools/build/kernel-source.py
           chmod +x tools/python
           chmod +x tools/build/*.py
+          echo "✅ 补丁应用完毕！"
 
-      - name: 初始化 OpenWrt 编译环境
+      - name: 12 - 初始化 OpenWrt 编译环境
         run: |
+          echo "⏳ 开始初始化 OpenWrt 编译树，请耐心等待..."
           cd sy108-mainline
           export SY108_KERNEL_DIR=${{ github.workspace }}/linux-udx710
-          tools/python tools/bootstrap.py
+          # 强制使用 Python 3.11 运行
+          python3 tools/bootstrap.py
+          echo "✅ OpenWrt 环境初始化完成！"
 
-      - name: 编译主系统 (Main)
+      - name: 13 - 编译主系统 (Main)
         run: |
+          echo "⏳ 正在编译主系统固件 (Main)，这需要较长时间..."
           cd sy108-mainline
           export SY108_KERNEL_DIR=${{ github.workspace }}/linux-udx710
-          tools/python tools/build/firmware.py main
+          python3 tools/build/firmware.py main
+          echo "✅ 主系统编译完成！"
 
-      - name: 编译恢复系统 (Recovery)
+      - name: 14 - 编译恢复系统 (Recovery)
         run: |
+          echo "⏳ 正在编译恢复系统固件 (Recovery)..."
           cd sy108-mainline
           export SY108_KERNEL_DIR=${{ github.workspace }}/linux-udx710
-          tools/python tools/build/firmware.py recovery
+          python3 tools/build/firmware.py recovery
+          echo "✅ 恢复系统编译完成！"
 
-      - name: 编译基础 U-Boot
+      - name: 15 - 编译基础 U-Boot
         run: |
+          echo "⏳ 正在编译 U-Boot..."
           cd sy108-uboot-spl
           make LABEL=dev
+          echo "✅ U-Boot 编译完成！"
 
-      - name: 封装 U-Boot (注入原厂 SML 签名)
+      - name: 16 - 封装 U-Boot (注入原厂 SML 签名)
         run: |
+          echo "⏳ 正在封装 U-Boot，注入底层签名..."
           cd sy108-uboot-spl
           make offline LABEL=mainline \
             SPL_IMAGE=${{ github.workspace }}/sy108-mainline/privates/splloader.bin \
             SML_IMAGE=${{ github.workspace }}/sy108-mainline/privates/sml.bin \
             MAIN_CAPSULE=${{ github.workspace }}/sy108-mainline/out/images/main/boot.bin \
             RECOVERY_CAPSULE=${{ github.workspace }}/sy108-mainline/out/images/recovery/boot.bin
+            
+          echo "------------------------------------------------"
+          echo "✅ U-Boot 封装完成！以下是封装报告内容："
           cat build/mainline/offline-report.json
+          echo "------------------------------------------------"
 
-      - name: 上传编译产物 (供 Actions 页面下载)
+      - name: 17 - 上传编译产物 (供 Actions 页面下载)
         uses: actions/upload-artifact@v4
         with:
           name: SY108-OpenWrt-Firmware
@@ -113,7 +149,7 @@ jobs:
             sy108-mainline/out/images/recovery/boot.bin
             sy108-uboot-spl/build/mainline/uboot.bin
 
-      - name: 发布固件到 Releases 页面 (可选)
+      - name: 18 - 发布固件到 Releases 页面 (可选)
         if: ${{ inputs.create_release == true }}
         uses: softprops/action-gh-release@v2
         with:
