@@ -1,4 +1,4 @@
-name: Build SY108 OpenWrt Firmware
+name: 编译 SY108 OpenWrt 固件
 
 on:
   workflow_dispatch:
@@ -15,74 +15,74 @@ jobs:
     timeout-minutes: 360
     
     steps:
-      - name: Maximize build space
-        uses: easimon/maximize-build-space@master
+      - name: 释放磁盘空间 (清理无用工具)
+        uses: jlumbroso/free-disk-space@main
         with:
-          root-reserve-mb: 1024
-          temp-reserve-mb: 1024
-          remove-dotnet: 'true'
-          remove-android: 'true'
-          remove-haskell: 'true'
-          remove-codeql: 'true'
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
 
-      - name: Set up QEMU and Docker Buildx
+      - name: 配置 QEMU 和 Docker 环境 (支持 ARM64)
         uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
 
-      - name: Install host dependencies
+      - name: 安装基础编译依赖
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential rsync unzip libncurses5-dev zlib1g-dev gawk wget git curl file
 
-      - name: Checkout Main Repo
+      - name: 拉取主仓库代码
         uses: actions/checkout@v4
         with:
           path: 'sy108-mainline'
 
-      - name: Checkout Linux Kernel
+      - name: 拉取 Linux 内核仓库
         uses: actions/checkout@v4
         with:
           repository: 'jason-liu-4980/linux-udx710'
           path: 'linux-udx710'
 
-      - name: Checkout U-Boot Repo
+      - name: 拉取 U-Boot 仓库
         uses: actions/checkout@v4
         with:
           repository: 'jason-liu-4980/sy108-uboot-spl'
           path: 'sy108-uboot-spl'
 
-      - name: Apply patches and fix permissions
+      - name: 应用补丁并修复脚本执行权限
         run: |
           cd sy108-mainline
           sed -i 's/raise SystemExit("Linux archive checksum mismatch")/pass/g' tools/build/kernel-source.py
           chmod +x tools/python
           chmod +x tools/build/*.py
 
-      - name: Bootstrap OpenWrt Environment
+      - name: 初始化 OpenWrt 编译环境
         run: |
           cd sy108-mainline
-          # 指向同级目录的内核源码
           export SY108_KERNEL_DIR=${{ github.workspace }}/linux-udx710
           tools/python tools/bootstrap.py
 
-      - name: Build Main System
+      - name: 编译主系统 (Main)
         run: |
           cd sy108-mainline
           export SY108_KERNEL_DIR=${{ github.workspace }}/linux-udx710
           tools/python tools/build/firmware.py main
 
-      - name: Build Recovery System
+      - name: 编译恢复系统 (Recovery)
         run: |
           cd sy108-mainline
           export SY108_KERNEL_DIR=${{ github.workspace }}/linux-udx710
           tools/python tools/build/firmware.py recovery
 
-      - name: Compile naked U-Boot
+      - name: 编译基础 U-Boot
         run: |
           cd sy108-uboot-spl
           make LABEL=dev
 
-      - name: Package U-Boot with SML Envelope
+      - name: 封装 U-Boot (注入原厂 SML 签名)
         run: |
           cd sy108-uboot-spl
           make offline LABEL=mainline \
@@ -92,7 +92,7 @@ jobs:
             RECOVERY_CAPSULE=${{ github.workspace }}/sy108-mainline/out/images/recovery/boot.bin
           cat build/mainline/offline-report.json
 
-      - name: Upload Artifacts (Actions 页面下载)
+      - name: 上传编译产物 (供 Actions 页面下载)
         uses: actions/upload-artifact@v4
         with:
           name: SY108-OpenWrt-Firmware
@@ -102,12 +102,12 @@ jobs:
             sy108-mainline/out/images/recovery/boot.bin
             sy108-uboot-spl/build/mainline/uboot.bin
 
-      - name: Release Firmware (可选发布到 Releases)
+      - name: 发布固件到 Releases 页面 (可选)
         if: ${{ inputs.create_release == true }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
-          name: SY108 OpenWrt Firmware Build ${{ github.run_number }}
+          name: SY108 OpenWrt 固件构建 ${{ github.run_number }}
           draft: false
           prerelease: false
           files: |
