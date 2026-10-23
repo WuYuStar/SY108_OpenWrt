@@ -3,6 +3,11 @@ name: 编译 SY108 OpenWrt 固件20261023
 on:
   workflow_dispatch:
     inputs:
+      include_wifi:
+        description: '是否注入 USB 无线网卡 (Wi-Fi) 驱动支持？'
+        required: true
+        type: boolean
+        default: false
       create_release:
         description: '是否自动创建 GitHub Release 发布固件？'
         required: true
@@ -26,12 +31,12 @@ jobs:
           docker-images: true
           swap-storage: true
 
-      - name: 02 - 配置 Python 3.11 环境 (修复 hashlib 报错)
+      - name: 02 - 配置 Python 3.11 环境
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: 03 - 配置 QEMU 和 Docker 环境 (支持 ARM64)
+      - name: 03 - 配置 QEMU 和 Docker Buildx
         uses: docker/setup-qemu-action@v3
       
       - name: 04 - 配置 Docker Buildx
@@ -62,11 +67,6 @@ jobs:
           cp my-config/privates/* sy108-mainline/privates/
           ls -l sy108-mainline/privates/
           echo "::endgroup::"
-          
-          if [ ! -f sy108-mainline/privates/splloader.bin ] || [ ! -f sy108-mainline/privates/sml.bin ]; then
-            echo "❌ 错误：splloader.bin 或 sml.bin 缺失，请检查仓库里的 privates 文件夹！"
-            exit 1
-          fi
 
       - name: 09 - 拉取 Linux 内核仓库
         uses: actions/checkout@v4
@@ -80,51 +80,111 @@ jobs:
           repository: 'jason-liu-4980/sy108-uboot-spl'
           path: 'sy108-uboot-spl'
 
-      - name: 11 - 应用极速补丁 (剔除QEMU模拟+开启多核)
+      - name: 11 - 核心提速与定向裁剪 (去QEMU、砍Python、加USB网卡)
         run: |
-          echo "::group::打补丁中..."
+          echo "::group::正在执行定向外科手术..."
           cd sy108-mainline
+          
+          # 1. 干掉内核校验报错
           sed -i 's/raise SystemExit("Linux archive checksum mismatch")/pass/g' tools/build/kernel-source.py
           
-          # 核心黑科技：去掉作者强制使用 ARM64 Docker 的命令，让 x86 原生跑交叉编译
-          sed -i 's/--platform.*arm64//g' tools/lib/workspace.py
+          # 2. 剥离 QEMU 模拟限制
+          sed -i "s/'--platform', 'linux\/arm64',//g" tools/lib/workspace.py
+          sed -i "s/os.environ.get('SY108_JOBS', '6')/os.environ.get('SY108_JOBS', '4')/g" tools/lib/workspace.py
+          sed -i "s/'build', '--platform', 'linux\/arm64',/'build',/g" tools/bootstrap.py
           
-          # 如果作者脚本里没加 -j 并发参数，我们强行给他加上 -j4
-          sed -i 's/make -C/make -C/g' tools/build/firmware.py
+          # 3. 主配置：砍掉无用包，并加上基础的 USB 有线网卡支持
+          sed -i '/CONFIG_PACKAGE_python3=y/d' configs/openwrt-main.config
+          sed -i '/CONFIG_PACKAGE_iperf3=y/d' configs/openwrt-main.config
+          sed -i '/CONFIG_PACKAGE_htop=y/d' configs/openwrt-main.config
+          
+          cat >> configs/openwrt-main.config << 'EOF'
+          CONFIG_PACKAGE_kmod-usb-net=y
+          CONFIG_PACKAGE_kmod-usb-net-cdc-ether=y
+          CONFIG_PACKAGE_kmod-usb-net-rndis=y
+          CONFIG_PACKAGE_kmod-usb-net-rtl8152=y
+          CONFIG_PACKAGE_kmod-usb-net-asix=y
+          CONFIG_PACKAGE_kmod-usb-net-asix-ax88179=y
+          CONFIG_PACKAGE_usb-modeswitch=y
+          CONFIG_CCACHE=y
+          EOF
+          
+          # 4. 内核配置：去语音，强行开启 USB 网卡
+          KERNEL_CFG=$(find ../linux-udx710/arch/arm64/configs -name "*defconfig" | head -n 1)
+          if [ -n "$KERNEL_CFG" ]; then
+              sed -i 's/CONFIG_SOUND=y/# CONFIG_SOUND is not set/g' "$KERNEL_CFG"
+              sed -i 's/CONFIG_SND_USB_AUDIO=y/# CONFIG_SND_USB_AUDIO is not set/g' "$KERNEL_CFG"
+              sed -i 's/# CONFIG_USB_USBNET is not set/CONFIG_USB_USBNET=y/g' "$KERNEL_CFG"
+          fi
           
           chmod +x tools/python
           chmod +x tools/build/*.py
-          echo "✅ 极速补丁应用完毕！(已去除 QEMU 损耗)"
+          echo "✅ 基础裁剪完成！"
           echo "::endgroup::"
 
-      - name: 11.5 - 恢复编译缓存 (极度关键：超时后能断点续传)
-        uses: actions/cache@v4
+      - name: 11.1 - (可选) 注入无线网卡驱动
+        if: ${{ inputs.include_wifi == true }}
+        run: |
+          echo "::group::检测到选择无线网卡功能，正在强行注入 Wi-Fi 驱动..."
+          cd sy108-mainline
+          
+          # 1. 注入 Wi-Fi 用户态软件包
+          cat >> configs/openwrt-main.config << 'EOF'
+          CONFIG_PACKAGE_wpad-openssl=y
+          CONFIG_PACKAGE_iw=y
+          CONFIG_PACKAGE_iwinfo=y
+          CONFIG_PACKAGE_kmod-rtl8xxxu=y
+          CONFIG_PACKAGE_kmod-rtl8188eu=y
+          CONFIG_PACKAGE_kmod-rtl8812au-ct=y
+          CONFIG_PACKAGE_kmod-rtl8821cu=y
+          CONFIG_PACKAGE_kmod-rtw88=y
+          CONFIG_PACKAGE_kmod-rtw88-usb=y
+          EOF
+          
+          # 2. 修改内核：强行撕开 WLAN 框架
+          KERNEL_CFG=$(find ../linux-udx710/arch/arm64/configs -name "*defconfig" | head -n 1)
+          if [ -n "$KERNEL_CFG" ]; then
+              sed -i 's/# CONFIG_WLAN is not set/CONFIG_WLAN=y/g' "$KERNEL_CFG"
+              sed -i 's/# CONFIG_WIRELESS is not set/CONFIG_WIRELESS=y/g' "$KERNEL_CFG"
+              sed -i 's/# CONFIG_CFG80211 is not set/CONFIG_CFG80211=y/g' "$KERNEL_CFG"
+              sed -i 's/# CONFIG_MAC80211 is not set/CONFIG_MAC80211=y/g' "$KERNEL_CFG"
+              
+              echo "CONFIG_RTW88=m" >> "$KERNEL_CFG"
+              echo "CONFIG_RTW88_USB=m" >> "$KERNEL_CFG"
+              echo "CONFIG_RTL8XXXU=m" >> "$KERNEL_CFG"
+          fi
+          echo "✅ 无线网卡支持注入完毕！"
+          echo "::endgroup::"
+
+      - name: 11.5 - 尝试恢复编译缓存
+        uses: actions/cache/restore@v4
         with:
           path: |
-            sy108-mainline/out/dl
+            sy108-mainline/out/downloads
+            sy108-mainline/out/ccache
             sy108-mainline/out/openwrt-build/build_dir
             sy108-mainline/out/openwrt-build/staging_dir
-          key: ${{ runner.os }}-openwrt-cache-v1
+          key: ${{ runner.os }}-openwrt-cache-v6
           restore-keys: |
             ${{ runner.os }}-openwrt-cache-
 
       - name: 12 - 初始化 OpenWrt 编译环境
         run: |
-          echo "::group::初始化 OpenWrt 环境 (可能需要10分钟)"
+          echo "::group::初始化 OpenWrt 环境"
           cd sy108-mainline
           export SY108_KERNEL_DIR=${{ github.workspace }}/linux-udx710
           export SY108_JOBS=4
-          export SY108_MEMORY=10g
+          export SY108_MEMORY=14g
           python3 tools/bootstrap.py
           echo "::endgroup::"
 
       - name: 13 - 编译主系统 (Main)
         run: |
-          echo "::group::编译主系统开始 (原生 X86 极速交叉编译)"
+          echo "::group::编译主系统开始 (原生交叉编译加速)"
           cd sy108-mainline
           export SY108_KERNEL_DIR=${{ github.workspace }}/linux-udx710
           export SY108_JOBS=4
-          export SY108_MEMORY=10g
+          export SY108_MEMORY=14g
           python3 tools/build/firmware.py main
           echo "::endgroup::"
 
@@ -134,9 +194,20 @@ jobs:
           cd sy108-mainline
           export SY108_KERNEL_DIR=${{ github.workspace }}/linux-udx710
           export SY108_JOBS=4
-          export SY108_MEMORY=10g
+          export SY108_MEMORY=14g
           python3 tools/build/firmware.py recovery
           echo "::endgroup::"
+
+      - name: 14.5 - 强制保存编译缓存 (即使超时也保存)
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: |
+            sy108-mainline/out/downloads
+            sy108-mainline/out/ccache
+            sy108-mainline/out/openwrt-build/build_dir
+            sy108-mainline/out/openwrt-build/staging_dir
+          key: ${{ runner.os }}-openwrt-cache-v6
 
       - name: 15 - 编译基础 U-Boot
         run: |
