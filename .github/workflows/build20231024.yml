@@ -1,4 +1,4 @@
-name: 编译 SY108 OpenWrt 固件20231024
+name: 编译 SY108 OpenWrt 固件
 
 on:
   workflow_dispatch:
@@ -83,51 +83,64 @@ jobs:
           path: 'sy108-uboot-spl'
 
       - name: 11 - 核心提速与定向裁剪
-  run: |
-    echo "========================================================="
-    echo "🚀 开始执行: 11 - 核心提速与定向裁剪 (强制双管齐下修复加密)"
-    echo "========================================================="
-    cd sy108-mainline
-    sed -i 's/raise SystemExit("Linux archive checksum mismatch")/pass/g' tools/build/kernel-source.py
-    sed -i "/'--platform',/,+1d" tools/lib/workspace.py
-    sed -i "s/os.environ.get('SY108_JOBS', '6')/os.environ.get('SY108_JOBS', '4')/g" tools/lib/workspace.py
-    sed -i "s/os.environ.get('SY108_MEMORY', '10g')/os.environ.get('SY108_MEMORY', '14g')/g" tools/lib/workspace.py
-    sed -i "s/'build', '--platform', 'linux\/arm64',/'build',/g" tools/bootstrap.py
-    sed -i 's/default=6/default=4/g' tools/build/firmware.py
-    
-    sed -i '/CONFIG_PACKAGE_python3=y/d' configs/openwrt-main.config
-    sed -i '/CONFIG_PACKAGE_iperf3=y/d' configs/openwrt-main.config
-    sed -i '/CONFIG_PACKAGE_htop=y/d' configs/openwrt-main.config
-    
-    echo "CONFIG_PACKAGE_kmod-usb-net=y" >> configs/openwrt-main.config
-    echo "CONFIG_PACKAGE_kmod-usb-net-cdc-ether=y" >> configs/openwrt-main.config
-    echo "CONFIG_PACKAGE_kmod-usb-net-rndis=y" >> configs/openwrt-main.config
-    echo "CONFIG_PACKAGE_kmod-usb-net-rtl8152=y" >> configs/openwrt-main.config
-    echo "CONFIG_PACKAGE_kmod-usb-net-asix=y" >> configs/openwrt-main.config
-    echo "CONFIG_CCACHE=y" >> configs/openwrt-main.config
-    
-    # 🎯 关键修复 1：在软件包层面强行要求 OpenWrt 编译这些模块
-    echo "CONFIG_PACKAGE_kmod-crypto-sha256=y" >> configs/openwrt-main.config
-    echo "CONFIG_PACKAGE_kmod-crypto-hmac=y" >> configs/openwrt-main.config
-    echo "CONFIG_PACKAGE_kmod-crypto-sha1=y" >> configs/openwrt-main.config
-    echo "CONFIG_PACKAGE_kmod-crypto-sha512=y" >> configs/openwrt-main.config
-    
-    KERNEL_CFG="integration/openwrt/target/linux/sprd/config-7.3"
-    if [ -f "$KERNEL_CFG" ]; then
-        sed -i 's/CONFIG_SOUND=y/# CONFIG_SOUND is not set/g' "$KERNEL_CFG" || true
-        echo "CONFIG_USB_USBNET=y" >> "$KERNEL_CFG"
-        echo "CONFIG_USB_NET_CDCETHER=y" >> "$KERNEL_CFG"
-        echo "CONFIG_USB_RTL8152=y" >> "$KERNEL_CFG"
-        
-        # 🎯 关键修复 2：强力覆盖，确保内核编译出 .ko 文件
-        echo "CONFIG_CRYPTO_SHA256=m" >> "$KERNEL_CFG"
-        echo "CONFIG_CRYPTO_SHA256_GENERIC=m" >> "$KERNEL_CFG"
-        echo "CONFIG_CRYPTO_HMAC=m" >> "$KERNEL_CFG"
-        echo "CONFIG_CRYPTO_SHA1=m" >> "$KERNEL_CFG"
-        echo "CONFIG_CRYPTO_SHA512=m" >> "$KERNEL_CFG"
-        echo "CONFIG_CRYPTO_AES=y" >> "$KERNEL_CFG"
-    fi
-    chmod +x tools/python tools/build/*.py "========================================================="
+        run: |
+          echo "========================================================="
+          echo "🚀 开始执行: 11 - 核心提速与定向裁剪 (双管齐下修复加密模块)"
+          echo "========================================================="
+          cd sy108-mainline
+          
+          # 1. 绕过内核哈希校验
+          sed -i 's/raise SystemExit("Linux archive checksum mismatch")/pass/g' tools/build/kernel-source.py
+          
+          # 2. 剥离 QEMU 跨行限制，解除并发与内存限制
+          sed -i "/'--platform',/,+1d" tools/lib/workspace.py
+          sed -i "s/os.environ.get('SY108_JOBS', '6')/os.environ.get('SY108_JOBS', '4')/g" tools/lib/workspace.py
+          sed -i "s/os.environ.get('SY108_MEMORY', '10g')/os.environ.get('SY108_MEMORY', '14g')/g" tools/lib/workspace.py
+          sed -i "s/'build', '--platform', 'linux\/arm64',/'build',/g" tools/bootstrap.py
+          
+          # 3. 强制降低主编译并发数，防止 OOM
+          sed -i 's/default=6/default=4/g' tools/build/firmware.py
+          
+          # 4. 主配置精简与 USB 网卡支持
+          sed -i '/CONFIG_PACKAGE_python3=y/d' configs/openwrt-main.config
+          sed -i '/CONFIG_PACKAGE_iperf3=y/d' configs/openwrt-main.config
+          sed -i '/CONFIG_PACKAGE_htop=y/d' configs/openwrt-main.config
+          
+          echo "CONFIG_PACKAGE_kmod-usb-net=y" >> configs/openwrt-main.config
+          echo "CONFIG_PACKAGE_kmod-usb-net-cdc-ether=y" >> configs/openwrt-main.config
+          echo "CONFIG_PACKAGE_kmod-usb-net-rndis=y" >> configs/openwrt-main.config
+          echo "CONFIG_PACKAGE_kmod-usb-net-rtl8152=y" >> configs/openwrt-main.config
+          echo "CONFIG_PACKAGE_kmod-usb-net-asix=y" >> configs/openwrt-main.config
+          echo "CONFIG_CCACHE=y" >> configs/openwrt-main.config
+          
+          # 5. 关键修复 1：软件包层面强行要求编译加密模块
+          echo "CONFIG_PACKAGE_kmod-crypto-sha256=y" >> configs/openwrt-main.config
+          echo "CONFIG_PACKAGE_kmod-crypto-hmac=y" >> configs/openwrt-main.config
+          echo "CONFIG_PACKAGE_kmod-crypto-sha1=y" >> configs/openwrt-main.config
+          echo "CONFIG_PACKAGE_kmod-crypto-sha512=y" >> configs/openwrt-main.config
+          
+          # 6. 内核配置层面强行锁定
+          KERNEL_CFG="integration/openwrt/target/linux/sprd/config-7.3"
+          if [ -f "$KERNEL_CFG" ]; then
+              sed -i 's/CONFIG_SOUND=y/# CONFIG_SOUND is not set/g' "$KERNEL_CFG" || true
+              echo "CONFIG_USB_USBNET=y" >> "$KERNEL_CFG"
+              echo "CONFIG_USB_NET_CDCETHER=y" >> "$KERNEL_CFG"
+              echo "CONFIG_USB_RTL8152=y" >> "$KERNEL_CFG"
+              
+              # 关键修复 2：必须编译为模块 (=m)
+              echo "CONFIG_CRYPTO_SHA256=m" >> "$KERNEL_CFG"
+              echo "CONFIG_CRYPTO_SHA256_GENERIC=m" >> "$KERNEL_CFG"
+              echo "CONFIG_CRYPTO_HMAC=m" >> "$KERNEL_CFG"
+              echo "CONFIG_CRYPTO_SHA1=m" >> "$KERNEL_CFG"
+              echo "CONFIG_CRYPTO_SHA512=m" >> "$KERNEL_CFG"
+              echo "CONFIG_CRYPTO_AES=y" >> "$KERNEL_CFG"
+          fi
+          chmod +x tools/python tools/build/*.py
+
+      - name: 11.1 - 注入无线网卡驱动 (可选)
+        if: ${{ inputs.include_wifi == true }}
+        run: |
+          echo "========================================================="
           echo "🚀 开始执行: 11.1 - 注入无线网卡驱动"
           echo "========================================================="
           cd sy108-mainline
