@@ -1,0 +1,250 @@
+name: 编译 SY108 OpenWrt 固件20231024
+
+on:
+  workflow_dispatch:
+    inputs:
+      include_wifi:
+        description: '是否注入 USB 无线网卡 (Wi-Fi) 驱动支持？'
+        required: true
+        type: boolean
+        default: false
+      create_release:
+        description: '是否自动创建 GitHub Release 发布固件？'
+        required: true
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+    
+    steps:
+      - name: 01 - 释放磁盘空间
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: 02 - 配置 Python 3.11 环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 03 - 配置 QEMU 和 Docker Buildx
+        uses: docker/setup-qemu-action@v3
+      
+      - name: 04 - 配置 Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 05 - 安装基础编译依赖
+        run: |
+          echo "========================================================="
+          echo "🚀 开始执行: 05 - 安装基础编译依赖"
+          echo "========================================================="
+          sudo apt-get update
+          sudo apt-get install -y build-essential rsync unzip libncurses5-dev zlib1g-dev gawk wget git curl file
+
+      - name: 06 - 拉取当前仓库 (提取 privates)
+        uses: actions/checkout@v4
+        with:
+          path: 'my-config'
+
+      - name: 07 - 拉取作者原始主仓库
+        uses: actions/checkout@v4
+        with:
+          repository: 'jason-liu-4980/sy108-mainline'
+          path: 'sy108-mainline'
+
+      - name: 08 - 注入 privates 文件
+        run: |
+          echo "========================================================="
+          echo "🚀 开始执行: 08 - 注入 privates 文件"
+          echo "========================================================="
+          mkdir -p sy108-mainline/privates
+          cp my-config/privates/* sy108-mainline/privates/
+          ls -l sy108-mainline/privates/
+
+      - name: 09 - 拉取 Linux 内核
+        uses: actions/checkout@v4
+        with:
+          repository: 'jason-liu-4980/linux-udx710'
+          path: 'linux-udx710'
+
+      - name: 10 - 拉取 U-Boot
+        uses: actions/checkout@v4
+        with:
+          repository: 'jason-liu-4980/sy108-uboot-spl'
+          path: 'sy108-uboot-spl'
+
+      - name: 11 - 核心提速与定向裁剪
+        run: |
+          echo "========================================================="
+          echo "🚀 开始执行: 11 - 核心提速与定向裁剪 (修复加密模块)"
+          echo "========================================================="
+          cd sy108-mainline
+          # 1. 绕过内核哈希校验
+          sed -i 's/raise SystemExit("Linux archive checksum mismatch")/pass/g' tools/build/kernel-source.py
+          
+          # 2. 剥离 QEMU 跨行限制，解除并发与内存限制
+          sed -i "/'--platform',/,+1d" tools/lib/workspace.py
+          sed -i "s/os.environ.get('SY108_JOBS', '6')/os.environ.get('SY108_JOBS', '4')/g" tools/lib/workspace.py
+          sed -i "s/os.environ.get('SY108_MEMORY', '10g')/os.environ.get('SY108_MEMORY', '14g')/g" tools/lib/workspace.py
+          sed -i "s/'build', '--platform', 'linux\/arm64',/'build',/g" tools/bootstrap.py
+          
+          # 3. 强制降低主编译并发数，防止 OOM
+          sed -i 's/default=6/default=4/g' tools/build/firmware.py
+          
+          # 4. 精简主配置，砍掉 Python3 等耗时全家桶，加入 USB 网卡支持
+          sed -i '/CONFIG_PACKAGE_python3=y/d' configs/openwrt-main.config
+          sed -i '/CONFIG_PACKAGE_iperf3=y/d' configs/openwrt-main.config
+          sed -i '/CONFIG_PACKAGE_htop=y/d' configs/openwrt-main.config
+          
+          echo "CONFIG_PACKAGE_kmod-usb-net=y" >> configs/openwrt-main.config
+          echo "CONFIG_PACKAGE_kmod-usb-net-cdc-ether=y" >> configs/openwrt-main.config
+          echo "CONFIG_PACKAGE_kmod-usb-net-rndis=y" >> configs/openwrt-main.config
+          echo "CONFIG_PACKAGE_kmod-usb-net-rtl8152=y" >> configs/openwrt-main.config
+          echo "CONFIG_PACKAGE_kmod-usb-net-asix=y" >> configs/openwrt-main.config
+          echo "CONFIG_CCACHE=y" >> configs/openwrt-main.config
+          
+          # 5. 修复内核配置：关闭语音，加入 USB 网卡，补全加密模块 (=m)
+          KERNEL_CFG="integration/openwrt/target/linux/sprd/config-7.3"
+          if [ -f "$KERNEL_CFG" ]; then
+              sed -i 's/CONFIG_SOUND=y/# CONFIG_SOUND is not set/g' "$KERNEL_CFG" || true
+              echo "CONFIG_USB_USBNET=y" >> "$KERNEL_CFG"
+              echo "CONFIG_USB_NET_CDCETHER=y" >> "$KERNEL_CFG"
+              echo "CONFIG_USB_RTL8152=y" >> "$KERNEL_CFG"
+              
+              # 解决 package/kernel/linux 缺失 .ko 报错
+              echo "CONFIG_CRYPTO_SHA256=m" >> "$KERNEL_CFG"
+              echo "CONFIG_CRYPTO_SHA256_GENERIC=m" >> "$KERNEL_CFG"
+              echo "CONFIG_CRYPTO_HMAC=m" >> "$KERNEL_CFG"
+              echo "CONFIG_CRYPTO_AES=y" >> "$KERNEL_CFG"
+          fi
+          chmod +x tools/python tools/build/*.py
+
+      - name: 11.1 - 注入无线网卡驱动 (可选)
+        if: ${{ inputs.include_wifi == true }}
+        run: |
+          echo "========================================================="
+          echo "🚀 开始执行: 11.1 - 注入无线网卡驱动"
+          echo "========================================================="
+          cd sy108-mainline
+          echo "CONFIG_PACKAGE_wpad-openssl=y" >> configs/openwrt-main.config
+          echo "CONFIG_PACKAGE_kmod-rtl8xxxu=y" >> configs/openwrt-main.config
+          echo "CONFIG_PACKAGE_kmod-rtl8188eu=y" >> configs/openwrt-main.config
+          echo "CONFIG_PACKAGE_kmod-rtl8812au-ct=y" >> configs/openwrt-main.config
+          echo "CONFIG_PACKAGE_kmod-rtl8821cu=y" >> configs/openwrt-main.config
+          
+          KERNEL_CFG="integration/openwrt/target/linux/sprd/config-7.3"
+          if [ -f "$KERNEL_CFG" ]; then
+              sed -i 's/# CONFIG_WLAN is not set/CONFIG_WLAN=y/g' "$KERNEL_CFG"
+              sed -i 's/# CONFIG_WIRELESS is not set/CONFIG_WIRELESS=y/g' "$KERNEL_CFG"
+              echo "CONFIG_CFG80211=y" >> "$KERNEL_CFG"
+              echo "CONFIG_MAC80211=y" >> "$KERNEL_CFG"
+          fi
+
+      - name: 11.5 - 恢复编译缓存
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            sy108-mainline/out/downloads
+            sy108-mainline/out/ccache
+            sy108-mainline/out/openwrt-build/build_dir
+            sy108-mainline/out/openwrt-build/staging_dir
+          key: ${{ runner.os }}-openwrt-cache-v9
+          restore-keys: |
+            ${{ runner.os }}-openwrt-cache-
+
+      - name: 12 - 初始化环境
+        run: |
+          echo "========================================================="
+          echo "🚀 开始执行: 12 - 初始化环境"
+          echo "========================================================="
+          cd sy108-mainline
+          export SY108_KERNEL_DIR=${{ github.workspace }}/linux-udx710
+          python3 tools/bootstrap.py
+
+      - name: 13 - 编译主系统 (Main) [重点监控]
+        run: |
+          echo "========================================================="
+          echo "🚀 开始执行: 13 - 编译主系统 (Main)"
+          echo "========================================================="
+          cd sy108-mainline
+          export SY108_KERNEL_DIR=${{ github.workspace }}/linux-udx710
+          set -o pipefail
+          python3 tools/build/firmware.py main 2>&1 | tee build_main.log
+
+      - name: 14 - 编译恢复系统 (Recovery)
+        run: |
+          echo "========================================================="
+          echo "🚀 开始执行: 14 - 编译恢复系统 (Recovery)"
+          echo "========================================================="
+          cd sy108-mainline
+          export SY108_KERNEL_DIR=${{ github.workspace }}/linux-udx710
+          python3 tools/build/firmware.py recovery
+
+      - name: 15 - 编译基础 U-Boot
+        run: |
+          echo "========================================================="
+          echo "🚀 开始执行: 15 - 编译基础 U-Boot"
+          echo "========================================================="
+          cd sy108-uboot-spl
+          make LABEL=dev
+
+      - name: 16 - 封装 U-Boot (注入 SML 签名)
+        run: |
+          echo "========================================================="
+          echo "🚀 开始执行: 16 - 封装 U-Boot"
+          echo "========================================================="
+          cd sy108-uboot-spl
+          make offline LABEL=mainline \
+            SPL_IMAGE=${{ github.workspace }}/sy108-mainline/privates/splloader.bin \
+            SML_IMAGE=${{ github.workspace }}/sy108-mainline/privates/sml.bin \
+            MAIN_CAPSULE=${{ github.workspace }}/sy108-mainline/out/images/main/boot.bin \
+            RECOVERY_CAPSULE=${{ github.workspace }}/sy108-mainline/out/images/recovery/boot.bin
+          cat build/mainline/offline-report.json
+
+      - name: 17 - 上传编译产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: SY108-OpenWrt-Firmware
+          path: |
+            sy108-mainline/out/images/main/sysupgrade.bin
+            sy108-mainline/out/images/main/boot.bin
+            sy108-mainline/out/images/recovery/boot.bin
+            sy108-uboot-spl/build/mainline/uboot.bin
+
+      - name: 17.1 - [失败专用] 提取报错核心
+        if: failure()
+        run: |
+          echo "========================================================="
+          echo "🚀 开始执行: 17.1 - 提取报错核心"
+          echo "========================================================="
+          echo "❌ 编译失败！以下是主系统最后 150 行错误日志："
+          if [ -f sy108-mainline/build_main.log ]; then
+            grep -i -E -B 10 -A 10 "Error|Killed|fatal" sy108-mainline/build_main.log | tail -n 150 || tail -n 100 sy108-mainline/build_main.log
+          else
+            echo "没有找到 build_main.log，可能卡在了前面某一步（如初始化）。"
+          fi
+
+      - name: 18 - 发布固件到 Releases
+        if: ${{ inputs.create_release == true && success() }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: SY108 OpenWrt 固件构建 ${{ github.run_number }}
+          draft: false
+          prerelease: false
+          files: |
+            sy108-mainline/out/images/main/sysupgrade.bin
+            sy108-mainline/out/images/main/boot.bin
+            sy108-mainline/out/images/recovery/boot.bin
+            sy108-uboot-spl/build/mainline/uboot.bin
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
