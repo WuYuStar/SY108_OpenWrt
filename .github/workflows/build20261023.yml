@@ -79,48 +79,49 @@ jobs:
         with:
           repository: 'jason-liu-4980/sy108-uboot-spl'
           path: 'sy108-uboot-spl'
+          
+      - name: 11 - 核心提速与定向裁剪 (去QEMU、砍Python、加USB网卡)
+        run: |
+          echo "::group::正在执行定向外科手术..."
+          cd sy108-mainline
+          
+          # 1. 干掉内核校验报错
+          sed -i 's/raise SystemExit("Linux archive checksum mismatch")/pass/g' tools/build/kernel-source.py
+          
+          # 2. 剥离 QEMU 模拟限制（修复跨行导致的删除失败）
+          sed -i "/'--platform',/,+1d" tools/lib/workspace.py
+          sed -i "s/os.environ.get('SY108_JOBS', '6')/os.environ.get('SY108_JOBS', '4')/g" tools/lib/workspace.py
+          sed -i "s/'build', '--platform', 'linux\/arm64',/'build',/g" tools/bootstrap.py
+          
+          # 3. 主配置：砍掉无用包，并加上基础的 USB 有线网卡支持
+          sed -i '/CONFIG_PACKAGE_python3=y/d' configs/openwrt-main.config
+          sed -i '/CONFIG_PACKAGE_iperf3=y/d' configs/openwrt-main.config
+          sed -i '/CONFIG_PACKAGE_htop=y/d' configs/openwrt-main.config
+          
+          cat >> configs/openwrt-main.config << 'EOF'
+          CONFIG_PACKAGE_kmod-usb-net=y
+          CONFIG_PACKAGE_kmod-usb-net-cdc-ether=y
+          CONFIG_PACKAGE_kmod-usb-net-rndis=y
+          CONFIG_PACKAGE_kmod-usb-net-rtl8152=y
+          CONFIG_PACKAGE_kmod-usb-net-asix=y
+          CONFIG_PACKAGE_kmod-usb-net-asix-ax88179=y
+          CONFIG_PACKAGE_usb-modeswitch=y
+          CONFIG_CCACHE=y
+          EOF
+          
+          # 4. 内核配置：去语音，强行开启 USB 网卡
+          KERNEL_CFG=$(find ../linux-udx710/arch/arm64/configs -name "*defconfig" | head -n 1)
+          if [ -n "$KERNEL_CFG" ]; then
+              sed -i 's/CONFIG_SOUND=y/# CONFIG_SOUND is not set/g' "$KERNEL_CFG"
+              sed -i 's/CONFIG_SND_USB_AUDIO=y/# CONFIG_SND_USB_AUDIO is not set/g' "$KERNEL_CFG"
+              sed -i 's/# CONFIG_USB_USBNET is not set/CONFIG_USB_USBNET=y/g' "$KERNEL_CFG"
+          fi
+          
+          chmod +x tools/python
+          chmod +x tools/build/*.py
+          echo "✅ 基础裁剪完成！"
+          echo "::endgroup::"
 
-- name: 11 - 核心提速与定向裁剪 (去QEMU、砍Python、加USB网卡)
-  run: |
-    echo "::group::正在执行定向外科手术..."
-    cd sy108-mainline
-    
-    # 1. 干掉内核校验报错
-    sed -i 's/raise SystemExit("Linux archive checksum mismatch")/pass/g' tools/build/kernel-source.py
-    
-    # 2. 剥离 QEMU 模拟限制（修复跨行导致的删除失败）
-    sed -i "/'--platform',/,+1d" tools/lib/workspace.py
-    sed -i "s/os.environ.get('SY108_JOBS', '6')/os.environ.get('SY108_JOBS', '4')/g" tools/lib/workspace.py
-    sed -i "s/'build', '--platform', 'linux\/arm64',/'build',/g" tools/bootstrap.py
-    
-    # 3. 主配置：砍掉无用包，并加上基础的 USB 有线网卡支持
-    sed -i '/CONFIG_PACKAGE_python3=y/d' configs/openwrt-main.config
-    sed -i '/CONFIG_PACKAGE_iperf3=y/d' configs/openwrt-main.config
-    sed -i '/CONFIG_PACKAGE_htop=y/d' configs/openwrt-main.config
-    
-    cat >> configs/openwrt-main.config << 'EOF'
-    CONFIG_PACKAGE_kmod-usb-net=y
-    CONFIG_PACKAGE_kmod-usb-net-cdc-ether=y
-    CONFIG_PACKAGE_kmod-usb-net-rndis=y
-    CONFIG_PACKAGE_kmod-usb-net-rtl8152=y
-    CONFIG_PACKAGE_kmod-usb-net-asix=y
-    CONFIG_PACKAGE_kmod-usb-net-asix-ax88179=y
-    CONFIG_PACKAGE_usb-modeswitch=y
-    CONFIG_CCACHE=y
-    EOF
-    
-    # 4. 内核配置：去语音，强行开启 USB 网卡
-    KERNEL_CFG=$(find ../linux-udx710/arch/arm64/configs -name "*defconfig" | head -n 1)
-    if [ -n "$KERNEL_CFG" ]; then
-        sed -i 's/CONFIG_SOUND=y/# CONFIG_SOUND is not set/g' "$KERNEL_CFG"
-        sed -i 's/CONFIG_SND_USB_AUDIO=y/# CONFIG_SND_USB_AUDIO is not set/g' "$KERNEL_CFG"
-        sed -i 's/# CONFIG_USB_USBNET is not set/CONFIG_USB_USBNET=y/g' "$KERNEL_CFG"
-    fi
-    
-    chmod +x tools/python
-    chmod +x tools/build/*.py
-    echo "✅ 基础裁剪完成！"
-    echo "::endgroup::"
 
       - name: 11.1 - (可选) 注入无线网卡驱动
         if: ${{ inputs.include_wifi == true }}
