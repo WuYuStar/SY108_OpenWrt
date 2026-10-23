@@ -80,7 +80,7 @@ jobs:
           repository: 'jason-liu-4980/sy108-uboot-spl'
           path: 'sy108-uboot-spl'
           
-      - name: 11 - 核心提速与定向裁剪 (去QEMU、砍Python、加USB网卡)
+            - name: 11 - 核心提速与定向裁剪 (去QEMU、降并发、去语音、加USB网卡)
         run: |
           echo "::group::正在执行定向外科手术..."
           cd sy108-mainline
@@ -88,15 +88,15 @@ jobs:
           # 1. 干掉内核校验报错
           sed -i 's/raise SystemExit("Linux archive checksum mismatch")/pass/g' tools/build/kernel-source.py
           
-          # 2. 剥离 QEMU 模拟限制（修复跨行导致的删除失败）
+          # 2. 剥离 QEMU 模拟限制
           sed -i "/'--platform',/,+1d" tools/lib/workspace.py
           sed -i "s/os.environ.get('SY108_JOBS', '6')/os.environ.get('SY108_JOBS', '4')/g" tools/lib/workspace.py
           sed -i "s/'build', '--platform', 'linux\/arm64',/'build',/g" tools/bootstrap.py
-
-          # 新增修复：强制把 firmware.py 的并发默认值从 6 改为 4，防止 OOM！
+          
+          # 3. 极其关键：强制把固件编译的并发数从 6 降到 4，防止内存溢出被杀
           sed -i 's/default=6/default=4/g' tools/build/firmware.py
           
-          # 3. 主配置：砍掉无用包，并加上基础的 USB 有线网卡支持
+          # 4. 主配置：砍掉无用包，加上 USB 有线网卡支持
           sed -i '/CONFIG_PACKAGE_python3=y/d' configs/openwrt-main.config
           sed -i '/CONFIG_PACKAGE_iperf3=y/d' configs/openwrt-main.config
           sed -i '/CONFIG_PACKAGE_htop=y/d' configs/openwrt-main.config
@@ -112,17 +112,25 @@ jobs:
           CONFIG_CCACHE=y
           EOF
           
-          # 4. 内核配置：去语音，强行开启 USB 网卡
-          KERNEL_CFG=$(find ../linux-udx710/arch/arm64/configs -name "*defconfig" | head -n 1)
-          if [ -n "$KERNEL_CFG" ]; then
-              sed -i 's/CONFIG_SOUND=y/# CONFIG_SOUND is not set/g' "$KERNEL_CFG"
-              sed -i 's/CONFIG_SND_USB_AUDIO=y/# CONFIG_SND_USB_AUDIO is not set/g' "$KERNEL_CFG"
-              sed -i 's/# CONFIG_USB_USBNET is not set/CONFIG_USB_USBNET=y/g' "$KERNEL_CFG"
+          # 5. 内核配置覆盖：直接修改 OpenWrt 强制覆盖文件
+          # 作者在 integration/openwrt/target/linux/sprd/ 下一定有 config-7.3
+          KERNEL_CFG="integration/openwrt/target/linux/sprd/config-7.3"
+          if [ -f "$KERNEL_CFG" ]; then
+              # 去语音
+              echo "# CONFIG_SOUND is not set" >> "$KERNEL_CFG"
+              echo "# CONFIG_SND_USB_AUDIO is not set" >> "$KERNEL_CFG"
+              # 强行打开 USB 网卡
+              echo "CONFIG_USB_USBNET=y" >> "$KERNEL_CFG"
+              echo "CONFIG_USB_NET_CDCETHER=y" >> "$KERNEL_CFG"
+              echo "CONFIG_USB_RTL8152=y" >> "$KERNEL_CFG"
+              echo "✅ 内核配置覆盖已追加到 config-7.3"
+          else
+              echo "⚠️ 没找到 config-7.3，跳过内核覆盖"
           fi
           
           chmod +x tools/python
           chmod +x tools/build/*.py
-          echo "✅ 基础裁剪完成！"
+          echo "✅ 基础裁剪完成！并发已降至 4 核！"
           echo "::endgroup::"
 
 
