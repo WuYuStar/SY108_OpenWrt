@@ -16,7 +16,6 @@ jobs:
     
     steps:
       - name: 01 - 释放磁盘空间 (清理无用工具)
-        run: echo "::group::释放磁盘空间中..."
         uses: jlumbroso/free-disk-space@main
         with:
           tool-cache: false
