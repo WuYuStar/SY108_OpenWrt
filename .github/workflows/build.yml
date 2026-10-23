@@ -1,4 +1,4 @@
-name: 编译 SY108 OpenWrt 固件
+name: 编译 SY108 OpenWrt 固件20261022
 
 on:
   workflow_dispatch:
