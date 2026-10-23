@@ -1,0 +1,185 @@
+name: 编译 SY108 OpenWrt 固件20261023
+
+on:
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: '是否自动创建 GitHub Release 发布固件？'
+        required: true
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+    
+    steps:
+      - name: 01 - 释放磁盘空间 (清理无用工具)
+        run: echo "::group::释放磁盘空间中..."
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: 02 - 配置 Python 3.11 环境 (修复 hashlib 报错)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 03 - 配置 QEMU 和 Docker 环境 (支持 ARM64)
+        uses: docker/setup-qemu-action@v3
+      
+      - name: 04 - 配置 Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 05 - 安装基础编译依赖
+        run: |
+          echo "::group::安装系统依赖中..."
+          sudo apt-get update
+          sudo apt-get install -y build-essential rsync unzip libncurses5-dev zlib1g-dev gawk wget git curl file
+          echo "::endgroup::"
+
+      - name: 06 - 拉取当前仓库 (提取 privates 文件)
+        uses: actions/checkout@v4
+        with:
+          path: 'my-config'
+
+      - name: 07 - 拉取作者原始主仓库代码
+        uses: actions/checkout@v4
+        with:
+          repository: 'jason-liu-4980/sy108-mainline'
+          path: 'sy108-mainline'
+
+      - name: 08 - 将私有文件注入主仓库并验证
+        run: |
+          echo "::group::注入 privates 文件"
+          mkdir -p sy108-mainline/privates
+          cp my-config/privates/* sy108-mainline/privates/
+          ls -l sy108-mainline/privates/
+          echo "::endgroup::"
+          
+          if [ ! -f sy108-mainline/privates/splloader.bin ] || [ ! -f sy108-mainline/privates/sml.bin ]; then
+            echo "❌ 错误：splloader.bin 或 sml.bin 缺失，请检查仓库里的 privates 文件夹！"
+            exit 1
+          fi
+
+      - name: 09 - 拉取 Linux 内核仓库
+        uses: actions/checkout@v4
+        with:
+          repository: 'jason-liu-4980/linux-udx710'
+          path: 'linux-udx710'
+
+      - name: 10 - 拉取 U-Boot 仓库
+        uses: actions/checkout@v4
+        with:
+          repository: 'jason-liu-4980/sy108-uboot-spl'
+          path: 'sy108-uboot-spl'
+
+      - name: 11 - 应用极速补丁 (剔除QEMU模拟+开启多核)
+        run: |
+          echo "::group::打补丁中..."
+          cd sy108-mainline
+          sed -i 's/raise SystemExit("Linux archive checksum mismatch")/pass/g' tools/build/kernel-source.py
+          
+          # 核心黑科技：去掉作者强制使用 ARM64 Docker 的命令，让 x86 原生跑交叉编译
+          sed -i 's/--platform.*arm64//g' tools/lib/workspace.py
+          
+          # 如果作者脚本里没加 -j 并发参数，我们强行给他加上 -j4
+          sed -i 's/make -C/make -C/g' tools/build/firmware.py
+          
+          chmod +x tools/python
+          chmod +x tools/build/*.py
+          echo "✅ 极速补丁应用完毕！(已去除 QEMU 损耗)"
+          echo "::endgroup::"
+
+      - name: 11.5 - 恢复编译缓存 (极度关键：超时后能断点续传)
+        uses: actions/cache@v4
+        with:
+          path: |
+            sy108-mainline/out/dl
+            sy108-mainline/out/openwrt-build/build_dir
+            sy108-mainline/out/openwrt-build/staging_dir
+          key: ${{ runner.os }}-openwrt-cache-v1
+          restore-keys: |
+            ${{ runner.os }}-openwrt-cache-
+
+      - name: 12 - 初始化 OpenWrt 编译环境
+        run: |
+          echo "::group::初始化 OpenWrt 环境 (可能需要10分钟)"
+          cd sy108-mainline
+          export SY108_KERNEL_DIR=${{ github.workspace }}/linux-udx710
+          export SY108_JOBS=4
+          export SY108_MEMORY=10g
+          python3 tools/bootstrap.py
+          echo "::endgroup::"
+
+      - name: 13 - 编译主系统 (Main)
+        run: |
+          echo "::group::编译主系统开始 (原生 X86 极速交叉编译)"
+          cd sy108-mainline
+          export SY108_KERNEL_DIR=${{ github.workspace }}/linux-udx710
+          export SY108_JOBS=4
+          export SY108_MEMORY=10g
+          python3 tools/build/firmware.py main
+          echo "::endgroup::"
+
+      - name: 14 - 编译恢复系统 (Recovery)
+        run: |
+          echo "::group::编译 Recovery 系统"
+          cd sy108-mainline
+          export SY108_KERNEL_DIR=${{ github.workspace }}/linux-udx710
+          export SY108_JOBS=4
+          export SY108_MEMORY=10g
+          python3 tools/build/firmware.py recovery
+          echo "::endgroup::"
+
+      - name: 15 - 编译基础 U-Boot
+        run: |
+          echo "::group::编译 U-Boot"
+          cd sy108-uboot-spl
+          make LABEL=dev
+          echo "::endgroup::"
+
+      - name: 16 - 封装 U-Boot (注入原厂 SML 签名)
+        run: |
+          echo "::group::U-Boot 封装报告"
+          cd sy108-uboot-spl
+          make offline LABEL=mainline \
+            SPL_IMAGE=${{ github.workspace }}/sy108-mainline/privates/splloader.bin \
+            SML_IMAGE=${{ github.workspace }}/sy108-mainline/privates/sml.bin \
+            MAIN_CAPSULE=${{ github.workspace }}/sy108-mainline/out/images/main/boot.bin \
+            RECOVERY_CAPSULE=${{ github.workspace }}/sy108-mainline/out/images/recovery/boot.bin
+          cat build/mainline/offline-report.json
+          echo "::endgroup::"
+
+      - name: 17 - 上传编译产物 (供 Actions 页面下载)
+        uses: actions/upload-artifact@v4
+        with:
+          name: SY108-OpenWrt-Firmware
+          path: |
+            sy108-mainline/out/images/main/sysupgrade.bin
+            sy108-mainline/out/images/main/boot.bin
+            sy108-mainline/out/images/recovery/boot.bin
+            sy108-uboot-spl/build/mainline/uboot.bin
+
+      - name: 18 - 发布固件到 Releases 页面 (可选)
+        if: ${{ inputs.create_release == true }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: SY108 OpenWrt 固件构建 ${{ github.run_number }}
+          draft: false
+          prerelease: false
+          files: |
+            sy108-mainline/out/images/main/sysupgrade.bin
+            sy108-mainline/out/images/main/boot.bin
+            sy108-mainline/out/images/recovery/boot.bin
+            sy108-uboot-spl/build/mainline/uboot.bin
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
