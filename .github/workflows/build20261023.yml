@@ -80,7 +80,7 @@ jobs:
           repository: 'jason-liu-4980/sy108-uboot-spl'
           path: 'sy108-uboot-spl'
           
-            - name: 11 - 核心提速与定向裁剪 (去QEMU、降并发、去语音、加USB网卡)
+      - name: 11 - 核心提速与定向裁剪 (去QEMU、降并发、去语音、加USB网卡)
         run: |
           echo "::group::正在执行定向外科手术..."
           cd sy108-mainline
