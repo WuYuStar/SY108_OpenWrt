@@ -92,6 +92,9 @@ jobs:
           sed -i "/'--platform',/,+1d" tools/lib/workspace.py
           sed -i "s/os.environ.get('SY108_JOBS', '6')/os.environ.get('SY108_JOBS', '4')/g" tools/lib/workspace.py
           sed -i "s/'build', '--platform', 'linux\/arm64',/'build',/g" tools/bootstrap.py
+
+          # 新增修复：强制把 firmware.py 的并发默认值从 6 改为 4，防止 OOM！
+          sed -i 's/default=6/default=4/g' tools/build/firmware.py
           
           # 3. 主配置：砍掉无用包，并加上基础的 USB 有线网卡支持
           sed -i '/CONFIG_PACKAGE_python3=y/d' configs/openwrt-main.config
