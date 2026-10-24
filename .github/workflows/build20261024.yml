@@ -85,23 +85,16 @@ jobs:
       - name: 11 - 核心提速与定向裁剪
         run: |
           echo "========================================================="
-          echo "🚀 开始执行: 11 - 核心提速与定向裁剪 (双管齐下修复加密模块)"
+          echo "🚀 开始执行: 11 - 核心提速与定向裁剪 (修复加密+清理脏缓存)"
           echo "========================================================="
           cd sy108-mainline
-          
-          # 1. 绕过内核哈希校验
           sed -i 's/raise SystemExit("Linux archive checksum mismatch")/pass/g' tools/build/kernel-source.py
-          
-          # 2. 剥离 QEMU 跨行限制，解除并发与内存限制
           sed -i "/'--platform',/,+1d" tools/lib/workspace.py
           sed -i "s/os.environ.get('SY108_JOBS', '6')/os.environ.get('SY108_JOBS', '4')/g" tools/lib/workspace.py
           sed -i "s/os.environ.get('SY108_MEMORY', '10g')/os.environ.get('SY108_MEMORY', '14g')/g" tools/lib/workspace.py
           sed -i "s/'build', '--platform', 'linux\/arm64',/'build',/g" tools/bootstrap.py
-          
-          # 3. 强制降低主编译并发数，防止 OOM
           sed -i 's/default=6/default=4/g' tools/build/firmware.py
           
-          # 4. 主配置精简与 USB 网卡支持
           sed -i '/CONFIG_PACKAGE_python3=y/d' configs/openwrt-main.config
           sed -i '/CONFIG_PACKAGE_iperf3=y/d' configs/openwrt-main.config
           sed -i '/CONFIG_PACKAGE_htop=y/d' configs/openwrt-main.config
@@ -113,13 +106,10 @@ jobs:
           echo "CONFIG_PACKAGE_kmod-usb-net-asix=y" >> configs/openwrt-main.config
           echo "CONFIG_CCACHE=y" >> configs/openwrt-main.config
           
-          # 5. 关键修复 1：软件包层面强行要求编译加密模块
-          echo "CONFIG_PACKAGE_kmod-crypto-sha256=y" >> configs/openwrt-main.config
-          echo "CONFIG_PACKAGE_kmod-crypto-hmac=y" >> configs/openwrt-main.config
-          echo "CONFIG_PACKAGE_kmod-crypto-sha1=y" >> configs/openwrt-main.config
-          echo "CONFIG_PACKAGE_kmod-crypto-sha512=y" >> configs/openwrt-main.config
+          # 强行要求软件包层面编译加密模块
+          echo "CONFIG_PACKAGE_kmod-crypto-sha256=m" >> configs/openwrt-main.config
+          echo "CONFIG_PACKAGE_kmod-crypto-hmac=m" >> configs/openwrt-main.config
           
-          # 6. 内核配置层面强行锁定
           KERNEL_CFG="integration/openwrt/target/linux/sprd/config-7.3"
           if [ -f "$KERNEL_CFG" ]; then
               sed -i 's/CONFIG_SOUND=y/# CONFIG_SOUND is not set/g' "$KERNEL_CFG" || true
@@ -127,15 +117,18 @@ jobs:
               echo "CONFIG_USB_NET_CDCETHER=y" >> "$KERNEL_CFG"
               echo "CONFIG_USB_RTL8152=y" >> "$KERNEL_CFG"
               
-              # 关键修复 2：必须编译为模块 (=m)
+              # 强制锁定内核层级的加密模块
               echo "CONFIG_CRYPTO_SHA256=m" >> "$KERNEL_CFG"
               echo "CONFIG_CRYPTO_SHA256_GENERIC=m" >> "$KERNEL_CFG"
               echo "CONFIG_CRYPTO_HMAC=m" >> "$KERNEL_CFG"
-              echo "CONFIG_CRYPTO_SHA1=m" >> "$KERNEL_CFG"
-              echo "CONFIG_CRYPTO_SHA512=m" >> "$KERNEL_CFG"
               echo "CONFIG_CRYPTO_AES=y" >> "$KERNEL_CFG"
           fi
           chmod +x tools/python tools/build/*.py
+
+          # 清理可能存在的 Host 脏缓存（防止 libtool 幽灵报错）
+          echo "🧹 清理可能引发幽灵报错的 Host 脏缓存..."
+          rm -rf out/openwrt-build/build_dir/host
+          rm -rf out/openwrt-build/staging_dir/host
 
       - name: 11.1 - 注入无线网卡驱动 (可选)
         if: ${{ inputs.include_wifi == true }}
@@ -166,7 +159,7 @@ jobs:
             sy108-mainline/out/ccache
             sy108-mainline/out/openwrt-build/build_dir
             sy108-mainline/out/openwrt-build/staging_dir
-          key: ${{ runner.os }}-openwrt-cache-v9
+          key: ${{ runner.os }}-openwrt-cache-v10
           restore-keys: |
             ${{ runner.os }}-openwrt-cache-
 
@@ -229,15 +222,15 @@ jobs:
             sy108-mainline/out/images/recovery/boot.bin
             sy108-uboot-spl/build/mainline/uboot.bin
 
-      - name: 17.1 - [失败专用] 提取报错核心
+      - name: 17.1 - [失败专用] 提取最后 200 行日志
         if: failure()
         run: |
           echo "========================================================="
-          echo "🚀 开始执行: 17.1 - 提取报错核心"
+          echo "🚀 开始执行: 17.1 - 打印 200 行报错日志"
           echo "========================================================="
-          echo "❌ 编译失败！以下是主系统最后 150 行错误日志："
           if [ -f sy108-mainline/build_main.log ]; then
-            grep -i -E -B 10 -A 10 "Error|Killed|fatal" sy108-mainline/build_main.log | tail -n 150 || tail -n 100 sy108-mainline/build_main.log
+            # 直接打印最后 200 行，不加 grep，防止漏掉上下文
+            tail -n 200 sy108-mainline/build_main.log
           else
             echo "没有找到 build_main.log，可能卡在了前面某一步（如初始化）。"
           fi
