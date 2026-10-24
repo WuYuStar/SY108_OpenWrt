@@ -1,0 +1,134 @@
+name: SY108 Device Build
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: sy108-device-build
+  cancel-in-progress: false
+jobs:
+  firmware:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      SY108_JOBS: '2'
+      SY108_MEMORY: 6g
+    steps:
+      - name: Checkout configuration
+        uses: actions/checkout@v4
+        with:
+          path: config
+      - name: Checkout locked mainline source
+        uses: actions/checkout@v4
+        with:
+          repository: jason-liu-4980/sy108-mainline
+          ref: 0266f72512550744febddfd7f84e96968e1bb215
+          path: sy108-mainline
+      - name: Checkout locked bootloader source
+        uses: actions/checkout@v4
+        with:
+          repository: jason-liu-4980/sy108-uboot-spl
+          ref: c9a04dc16cf0ebf9b63b5527bb4c8045074a2aff
+          path: sy108-uboot-spl
+      - name: Prepare runner
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo apt-get update
+          sudo apt-get install -y git python3 gzip curl
+          df -h .
+          git -C sy108-uboot-spl fetch --depth=1 origin oem:refs/heads/oem
+      - name: Verify own device inputs and apply bounded NV compatibility
+        shell: python
+        run: |
+          from pathlib import Path
+          import base64, hashlib, json, subprocess
+          expected = {
+              'splloader.bin': '18c097aa79e07c46e5847c60972e99aac1848d6200600a6078b78f51c277b18c',
+              'sml.bin': 'cbc70b4a3447231342d38cb17cf66e1c6593f2d4583f167b8e8037b1027fdc6b',
+          }
+          for name, digest in expected.items():
+              p = Path('config/privates') / name
+              assert hashlib.sha256(p.read_bytes()).hexdigest() == digest, f'Wrong device input: {name}'
+          patch = base64.b64decode('ZGlmZiAtLWdpdCBhL2NvbXBvbmVudHMvY3Budi9pbmNsdWRlL252X3ZlbmRvci5oIGIvY29tcG9uZW50cy9jcG52L2luY2x1ZGUvbnZfdmVuZG9yLmgKaW5kZXggMDNlNTQ5My4uZDA4MWVhYiAxMDA2NDQKLS0tIGEvY29tcG9uZW50cy9jcG52L2luY2x1ZGUvbnZfdmVuZG9yLmgKKysrIGIvY29tcG9uZW50cy9jcG52L2luY2x1ZGUvbnZfdmVuZG9yLmgKQEAgLTUsNiArNSw4IEBACiAjaW5jbHVkZSA8c3RkZGVmLmg+CiAjaW5jbHVkZSA8c3RkaW50Lmg+CiAvKiBQYXlsb2FkIHNpemUgYm91bmRzIHRoZSBvcmlnaW5hbCBoZWFkZXI7IGJvdGggT0VNIGNoZWNrc3VtIHdpZHRocyBhcmUgdmFsaWQuICovCitpbnQgbnZfdmVuZG9yX2hlYWRlcl92YWxpZChjb25zdCB1aW50OF90ICosIHVpbnQzMl90LCB1aW50MzJfdCAqKTsKK2ludCBudl92ZW5kb3JfcGFkZGluZ192YWxpZChjb25zdCB1aW50OF90ICosIHNpemVfdCwgdWludDMyX3QsIHVpbnQzMl90KTsKIGludCBudl92ZW5kb3JfdmFsaWQoY29uc3QgdWludDhfdCAqLCBzaXplX3QsIHVpbnQzMl90LCB1bnNpZ25lZCAqKTsKIC8qIEV4cGxpY2l0IGJvb3QvcmVjb3Zlcnkgb25seSwgQ1Agc3RvcHBlZCBhbmQgY2FsbGVyIG93bnMgYm90aCBVQkkgdm9sdW1lcy4KICAqIFJlcGFpcnMgT05MWSBhbiBpbnZhbGlkIHJlcGxpY2EgZnJvbSB0aGUgdmFsaWQgb25lLCB1c2luZyBzdG9jayBWT0xVUCBzaXplLgpkaWZmIC0tZ2l0IGEvY29tcG9uZW50cy9jcG52L3NyYy9udl92ZW5kb3IuYyBiL2NvbXBvbmVudHMvY3Budi9zcmMvbnZfdmVuZG9yLmMKaW5kZXggMTUyOTM5MS4uMDM0NzliZiAxMDA2NDQKLS0tIGEvY29tcG9uZW50cy9jcG52L3NyYy9udl92ZW5kb3IuYworKysgYi9jb21wb25lbnRzL2NwbnYvc3JjL252X3ZlbmRvci5jCkBAIC0xNCwxMCArMTQsMzkgQEAgc3RhdGljIHVpbnQzMl90IGdldDMyKGNvbnN0IHVpbnQ4X3QgKnApCiAJcmV0dXJuICh1aW50MzJfdClwWzBdIHwgKHVpbnQzMl90KXBbMV0gPDwgOCB8ICh1aW50MzJfdClwWzJdIDw8IDE2IHwgKHVpbnQzMl90KXBbM10gPDwgMjQ7CiB9CiAKK2ludCBudl92ZW5kb3JfaGVhZGVyX3ZhbGlkKGNvbnN0IHVpbnQ4X3QgKmhlYWRlciwgdWludDMyX3QgcGF5bG9hZCwgdWludDMyX3QgKmRlY2xhcmVkKQoreworCWlmICghaGVhZGVyIHx8ICFwYXlsb2FkIHx8IHBheWxvYWQgPiBOVl9NQVhfSU1BR0UgfHwKKwkgICAgZ2V0MzIoaGVhZGVyKSAhPSBOVl9JTUFHRV9NQUdJQykKKwkJcmV0dXJuIDA7CisJdWludDMyX3QgbGVuZ3RoID0gZ2V0MzIoaGVhZGVyICsgNCk7CisJaWYgKCFsZW5ndGggfHwgbGVuZ3RoID4gcGF5bG9hZCkKKwkJcmV0dXJuIDA7CisJaWYgKGRlY2xhcmVkKQorCQkqZGVjbGFyZWQgPSBsZW5ndGg7CisJcmV0dXJuIDE7Cit9CisKK2ludCBudl92ZW5kb3JfcGFkZGluZ192YWxpZChjb25zdCB1aW50OF90ICpkYXRhLCBzaXplX3QgbGVuZ3RoLCB1aW50MzJfdCBvZmZzZXQsCisJCQkgICAgdWludDMyX3QgZGVjbGFyZWQpCit7CisJc2l6ZV90IHN0YXJ0ID0gb2Zmc2V0IDwgZGVjbGFyZWQgPyAoc2l6ZV90KShkZWNsYXJlZCAtIG9mZnNldCkgOiAwOworCWlmICghZGF0YSAmJiBsZW5ndGgpCisJCXJldHVybiAwOworCS8qIFNvbWUgT0VNIGltYWdlcyBkZWNsYXJlIHRoZWlyIHVzZWQgcmVjb3JkIGJ5dGVzLCB3aGlsZSB0aGUgbW9kZW0ncworCSAqIGNvbmZpZ3VyZWQgUkFNIGRpc2sgaXMgbGFyZ2VyLiBPbmx5IGVyYXNlZCBwYWRkaW5nIG1heSBleHRlbmQgdGhlbS4gKi8KKwlmb3IgKHNpemVfdCBpID0gc3RhcnQ7IGkgPCBsZW5ndGg7IGkrKykKKwkJaWYgKGRhdGFbaV0gIT0gMHhmZikKKwkJCXJldHVybiAwOworCXJldHVybiAxOworfQorCiBpbnQgbnZfdmVuZG9yX3ZhbGlkKGNvbnN0IHVpbnQ4X3QgKnAsIHNpemVfdCBuLCB1aW50MzJfdCBwYXlsb2FkLCB1bnNpZ25lZCAqYml0cykKIHsKKwl1aW50MzJfdCBkZWNsYXJlZDsKIAlpZiAoIXAgfHwgIXBheWxvYWQgfHwgcGF5bG9hZCA+IE5WX01BWF9JTUFHRSB8fCBwYXlsb2FkICUgNTEyIHx8Ci0JICAgIG4gIT0gKHNpemVfdClwYXlsb2FkICsgNTEyIHx8IGdldDMyKHApICE9IE5WX0lNQUdFX01BR0lDIHx8IGdldDMyKHAgKyA0KSAhPSBwYXlsb2FkKQorCSAgICBuICE9IChzaXplX3QpcGF5bG9hZCArIDUxMiB8fCAhbnZfdmVuZG9yX2hlYWRlcl92YWxpZChwLCBwYXlsb2FkLCAmZGVjbGFyZWQpIHx8CisJICAgICFudl92ZW5kb3JfcGFkZGluZ192YWxpZChwICsgNTEyLCBwYXlsb2FkLCAwLCBkZWNsYXJlZCkpCiAJCXJldHVybiAwOwogCXVpbnQzMl90IHN1bSA9IGdldDMyKHAgKyA4KTsKIAl1bnNpZ25lZCBtb2RlOwpAQCAtNjYsMTAgKzk1LDExIEBAIHN0YXRpYyBpbnQgcmVhZF9hdChpbnQgZmQsIHVpbnQ4X3QgKnAsIHNpemVfdCBsZW5ndGgsIHVpbnQ2NF90IGJhc2UsIHVpbnQ2NF90IGVuCiBzdGF0aWMgaW50IHZhbGlkX3N0b3JlZF9pbWFnZShpbnQgZmQsIHVpbnQzMl90IHBheWxvYWQsIHVpbnQ4X3QgZmlyc3RbOF0sIHVpbnQ2NF90IGVuZCkKIHsKIAl1aW50OF90IGhlYWRlcltOVl9IRUFERVJdOworCXVpbnQzMl90IGRlY2xhcmVkOwogCWludCBlID0gcmVhZF9hdChmZCwgaGVhZGVyLCBzaXplb2YoaGVhZGVyKSwgMCwgZW5kKTsKIAlpZiAoZSkKIAkJcmV0dXJuIGU7Ci0JaWYgKGdldDMyKGhlYWRlcikgIT0gTlZfSU1BR0VfTUFHSUMgfHwgZ2V0MzIoaGVhZGVyICsgNCkgIT0gcGF5bG9hZCkKKwlpZiAoIW52X3ZlbmRvcl9oZWFkZXJfdmFsaWQoaGVhZGVyLCBwYXlsb2FkLCAmZGVjbGFyZWQpKQogCQlyZXR1cm4gLUVCQURNU0c7CiAJdWludDhfdCAqYmxvY2sgPSBtYWxsb2MoSU9fQ0hVTkspOwogCWlmICghYmxvY2spCkBAIC04MSw2ICsxMTEsMTAgQEAgc3RhdGljIGludCB2YWxpZF9zdG9yZWRfaW1hZ2UoaW50IGZkLCB1aW50MzJfdCBwYXlsb2FkLCB1aW50OF90IGZpcnN0WzhdLCB1aW50NjQKIAkJCW4gPSBJT19DSFVOSzsKIAkJaWYgKChlID0gcmVhZF9hdChmZCwgYmxvY2ssIG4sICh1aW50NjRfdClOVl9IRUFERVIgKyBvZmYsIGVuZCkpKQogCQkJYnJlYWs7CisJCWlmICghbnZfdmVuZG9yX3BhZGRpbmdfdmFsaWQoYmxvY2ssIG4sIG9mZiwgZGVjbGFyZWQpKSB7CisJCQllID0gLUVCQURNU0c7CisJCQlicmVhazsKKwkJfQogCQlpZiAoIW9mZiAmJiBmaXJzdCkKIAkJCW1lbWNweShmaXJzdCwgYmxvY2ssIDgpOwogCQlzdW0gKz0gbnZfY2hlY2tzdW1fc3VtKGJsb2NrLCBuKTsKZGlmZiAtLWdpdCBhL2NvbXBvbmVudHMvY3Budi9zcmMvbnZfdmVuZG9yX2JhY2tlbmQuYyBiL2NvbXBvbmVudHMvY3Budi9zcmMvbnZfdmVuZG9yX2JhY2tlbmQuYwppbmRleCBiNTcyMGUyLi40M2ZjNTNlIDEwMDY0NAotLS0gYS9jb21wb25lbnRzL2NwbnYvc3JjL252X3ZlbmRvcl9iYWNrZW5kLmMKKysrIGIvY29tcG9uZW50cy9jcG52L3NyYy9udl92ZW5kb3JfYmFja2VuZC5jCkBAIC0yMDEsMTIgKzIwMSwxMiBAQCBzdGF0aWMgaW50IGxvYWRfaW1hZ2Uoc3RydWN0IG52X3ViaV9iYWNrZW5kICpiKQogCXVuc2lnbmVkIGZpcnN0ID0gKHJhbmQoKSAmIDEpID8gMHUgOiAxdTsKIAlmb3IgKHVuc2lnbmVkIGF0dGVtcHQgPSAwOyBhdHRlbXB0IDwgMjsgYXR0ZW1wdCsrKSB7CiAJCXVuc2lnbmVkIGkgPSBmaXJzdCBeIGF0dGVtcHQ7CisJCXVpbnQzMl90IGRlY2xhcmVkOwogCQljbGVhcl9ibG9ja3Modik7CiAJCWUgPSByZWFkX2V4YWN0KGIsIGItPmZkW2ldLCB2LT5oZWFkZXIsIE5WX0hFQURFUiwgMCk7CiAJCWlmIChlID09IE5WVV9ERUFETElORSB8fCBlID09IE5WVV9PV05FUlNISVApCiAJCQlyZXR1cm4gZTsKLQkJaWYgKGUgfHwgZ2V0MzIodi0+aGVhZGVyKSAhPSBOVl9JTUFHRV9NQUdJQyB8fAotCQkgICAgZ2V0MzIodi0+aGVhZGVyICsgNCkgIT0gYi0+cGF5bG9hZF9zaXplKQorCQlpZiAoZSB8fCAhbnZfdmVuZG9yX2hlYWRlcl92YWxpZCh2LT5oZWFkZXIsIGItPnBheWxvYWRfc2l6ZSwgJmRlY2xhcmVkKSkKIAkJCWNvbnRpbnVlOwogCQl1aW50NjRfdCBzdW0gPSAwOwogCQlmb3IgKHVpbnQzMl90IG9mZiA9IDA7IG9mZiA8IGItPnBheWxvYWRfc2l6ZTsgb2ZmICs9IENIVU5LKSB7CkBAIC0yMTUsNiArMjE1LDEwIEBAIHN0YXRpYyBpbnQgbG9hZF9pbWFnZShzdHJ1Y3QgbnZfdWJpX2JhY2tlbmQgKmIpCiAJCQllID0gcmVhZF9leGFjdChiLCBiLT5mZFtpXSwgdi0+d29yaywgbGVuZ3RoLCAodWludDY0X3QpTlZfSEVBREVSICsgb2ZmKTsKIAkJCWlmIChlKQogCQkJCWJyZWFrOworCQkJaWYgKCFudl92ZW5kb3JfcGFkZGluZ192YWxpZCh2LT53b3JrLCBsZW5ndGgsIG9mZiwgZGVjbGFyZWQpKSB7CisJCQkJZSA9IE5WVV9JTUFHRTsKKwkJCQlicmVhazsKKwkJCX0KIAkJCWlmICgoZSA9IHN0b3JlX2Jsb2NrKHYsIGluZGV4KSkpCiAJCQkJcmV0dXJuIGU7CiAJCQlzdW0gKz0gdi0+YmxvY2tbaW5kZXhdLnN1bTsK')
+          Path('nv-compatibility.patch').write_bytes(patch)
+          subprocess.run(['git', '-C', 'sy108-mainline', 'apply', '--check', '../nv-compatibility.patch'], check=True)
+          subprocess.run(['git', '-C', 'sy108-mainline', 'apply', '../nv-compatibility.patch'], check=True)
+          # Run native x86_64 containers while retaining the ARM64 cross target.
+          for name in ('tools/lib/workspace.py', 'tools/bootstrap.py'):
+              p = Path('sy108-mainline') / name
+              text = p.read_text()
+              assert "'linux/arm64'" in text
+              p.write_text(text.replace("'linux/arm64'", "'linux/amd64'"))
+          p = Path('sy108-mainline/manifests/kernel.json')
+          lock = json.loads(p.read_text())
+          assert lock['commit'] == '14658d97220a06e34976d703e167073462390c78'
+          # Verified against all 96,217 blobs of the locked Git tree locally.
+          # Continue enforcing the expected archive checksum; never bypass it.
+          lock['sha256'] = '8f5cef5d5f15b738b112c8b1ddc0960d4093bae4b857b449f0cbbe50e617db80'
+          p.write_text(json.dumps(lock, indent=2) + '\n')
+          # Bound stalled network transfers inside OpenWrt containers.
+          p = Path('sy108-mainline/tools/lib/workspace.py')
+          text = p.read_text()
+          marker = "        'HOME=/tmp',"
+          assert marker in text
+          p.write_text(text.replace(marker, marker + "\n        '--env',\n        'CURL_OPTIONS=--connect-timeout 30 --speed-time 60 --speed-limit 1024',"))
+      - name: Restore verified source downloads
+        uses: actions/cache@v4
+        with:
+          path: sy108-mainline/out/downloads
+          key: sy108-downloads-v1-${{ github.run_id }}
+          restore-keys: sy108-downloads-v1-
+      - name: Bootstrap locked sources
+        working-directory: sy108-mainline
+        run: |
+          set -o pipefail
+          python3 tools/bootstrap.py 2>&1 | tee bootstrap.log
+      - name: Build main system
+        working-directory: sy108-mainline
+        run: |
+          set -o pipefail
+          python3 tools/build/firmware.py main --jobs 2 2>&1 | tee build-main.log
+      - name: Build recovery system
+        working-directory: sy108-mainline
+        run: |
+          set -o pipefail
+          python3 tools/build/firmware.py recovery --jobs 2 2>&1 | tee build-recovery.log
+      - name: Build and verify device bootloader offline
+        working-directory: sy108-uboot-spl
+        run: |
+          set -o pipefail
+          make offline LABEL=device \
+            SPL_IMAGE="$GITHUB_WORKSPACE/config/privates/splloader.bin" \
+            SML_IMAGE="$GITHUB_WORKSPACE/config/privates/sml.bin" \
+            MAIN_CAPSULE="$GITHUB_WORKSPACE/sy108-mainline/out/images/main/boot.bin" \
+            RECOVERY_CAPSULE="$GITHUB_WORKSPACE/sy108-mainline/out/images/recovery/boot.bin" \
+            2>&1 | tee build-bootloader.log
+          test -s build/device/offline-report.json
+          cat build/device/offline-report.json
+      - name: Collect unambiguous firmware filenames
+        run: |
+          mkdir -p firmware/main firmware/recovery firmware/bootloader
+          cp sy108-mainline/out/images/main/{boot.bin,rootfs.squashfs,sysupgrade.bin,build.json} firmware/main/
+          cp sy108-mainline/out/images/recovery/{boot.bin,build.json} firmware/recovery/
+          cp sy108-uboot-spl/build/device/{uboot.bin,offline-report.json} firmware/bootloader/
+          cp nv-compatibility.patch firmware/
+          git -C sy108-mainline diff > firmware/mainline-source.patch
+          printf '%s\n' 'Initial stock-to-mainline installation requires UBI volume migration.' 'sysupgrade.bin is an upgrade archive: do not write it directly to the stock system volume.' > firmware/INSTALL-NOTE.txt
+          (cd firmware && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
+      - name: Upload validated firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: SY108-Device-Firmware
+          path: firmware/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: SY108-Build-Logs
+          path: |
+            sy108-mainline/*.log
+            sy108-uboot-spl/*.log
+          if-no-files-found: ignore
+          retention-days: 7
